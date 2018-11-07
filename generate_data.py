@@ -26,7 +26,7 @@ print("\nTraining data:")
 print(training.shape )
 print(training.head() )
 print("Saving training data...")
-training.to_pickle('X_train_small.pkl.gz')
+training.to_pickle('train_small.pkl.gz')
 
 gc.collect()
 
@@ -39,7 +39,7 @@ valid1 = pd.read_csv( "data/train.csv",
                       dtype=dtypes)
 
 valid1.reset_index(drop=True,inplace=True)
-valid1.to_pickle('X_valid_small.pkl.gz')
+valid1.to_pickle('data/valid_small.pkl.gz')
 
 gc.collect()
 
@@ -56,9 +56,9 @@ print("\nTraining data:")
 print(training.shape )
 print(training.head() )
 print("Saving training data...")
-training.to_pickle('X_train_small.pkl.gz')
+training.to_pickle('data/train.pkl.gz')
 
-
+gc.collect()
 
 # Validation data
 print( "Extracting first chunk of validation data...")
@@ -94,6 +94,6 @@ print("\nValidation data:")
 print(validation.shape)
 print(validation.head())
 print("Saving validation data...")
-validation.to_pickle('data/X_valid.pkl.gz')
+validation.to_pickle('data/valid.pkl.gz')
 
 print("\nDone")

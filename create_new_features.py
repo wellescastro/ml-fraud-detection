@@ -13,29 +13,29 @@ dtypes = {
         }
 '''
 
-training_path = "data/X_train_small.pkl.gz"
-validation_path = "data/X_valid_small.pkl.gz"
+training_path = "data/train_small.pkl.gz"
+validation_path = "data/valid_small.pkl.gz"
 
-X_train = pd.read_pickle(training_path)
-X_train['click_time'] = pd.to_datetime(X_train['click_time'])
+train_df = pd.read_pickle(training_path)
+train_df['click_time'] = pd.to_datetime(train_df['click_time'])
 
-X_valid = pd.read_pickle(validation_path)
-X_valid['click_time'] = pd.to_datetime(X_valid['click_time'])
+valid_df = pd.read_pickle(validation_path)
+valid_df['click_time'] = pd.to_datetime(valid_df['click_time'])
 
-nb_train_samples = len(X_train)
-X_train_valid = pd.concat([X_train, X_valid])
+nb_train_samples = len(train_df)
+train_valid_df = pd.concat([train_df, valid_df])
 
 
 ########## Adding time features #############
 
 # Extract different time granulatities
 
-X_train_valid['day'] = X_train_valid['click_time'].dt.day.astype('uint8')
-X_train_valid['hour'] = X_train_valid['click_time'].dt.hour.astype('uint8')
-X_train_valid['minute'] = X_train_valid['click_time'].dt.minute.astype('uint8')
-X_train_valid['second'] = X_train_valid['click_time'].dt.second.astype('uint8')
-X_train_valid["doy"]  =  X_train_valid['click_time'].dt.dayofyear.astype('uint8')
-X_train_valid['wday'] =  X_train_valid['click_time'].dt.dayofweek.astype('uint8')
+train_valid_df['day'] = train_valid_df['click_time'].dt.day.astype('uint8')
+train_valid_df['hour'] = train_valid_df['click_time'].dt.hour.astype('uint8')
+train_valid_df['minute'] = train_valid_df['click_time'].dt.minute.astype('uint8')
+train_valid_df['second'] = train_valid_df['click_time'].dt.second.astype('uint8')
+train_valid_df["doy"]  =  train_valid_df['click_time'].dt.dayofyear.astype('uint8')
+train_valid_df['wday'] =  train_valid_df['click_time'].dt.dayofweek.astype('uint8')
 
 
 ########## Adding frequency features - approach based on groupby->count() ##############
@@ -53,15 +53,15 @@ def add_frequency_features(df, features):
     return df.merge(rate, on=features, how='left')
 
 # Add device downloadability feature: frequência referente a quantas vezes os clicks oriundo de cada um dos dispositivo resultaram no download do aplicativo
-# device_count = X_train_valid.groupby(['device'])['is_attributed'].count() # count how many clicks came from the same device
-# downloaded_device_count = X_train_valid.groupby(['device'])['is_attributed'].sum() # take only the positive ones, the ones that were downloaded
+# device_count = train_valid_df.groupby(['device'])['is_attributed'].count() # count how many clicks came from the same device
+# downloaded_device_count = train_valid_df.groupby(['device'])['is_attributed'].sum() # take only the positive ones, the ones that were downloaded
 # rate = downloaded_device_count / device_count
 # rate = rate.to_frame().reset_index().rename(index=str, columns={'is_attributed':'device_downloadability'})
-# train_extra = X_train_valid.merge(rate, on='device', how='left')
+# train_extra = train_valid_df.merge(rate, on='device', how='left')
 
 variables = ['ip', 'app', 'device', 'os', 'channel']
 for var in variables:
-    X_train_valid = add_frequency_features(X_train_valid, [var])
+    train_valid_df = add_frequency_features(train_valid_df, [var])
 
 ######### Adding others features by grouping #############
 ''' 
@@ -93,14 +93,15 @@ for function, groupby in grouping_strategies.items():
     groupby_criteria = groupby[0]
     features_to_select = groupby[1]
     feature_name = groupby[2]
-    X_train_valid = add_groupby_feature(X_train_valid, groupby_criteria, features_to_select, function, feature_name)
+    train_valid_df = add_groupby_feature(train_valid_df, groupby_criteria, features_to_select, function, feature_name)
 
 print ("Final features")
-print(X_train.columns)
+print(train_valid_df.columns)
 
-X_train, X_valid = X_train_valid.iloc[:nb_train_samples, :], X_train_valid.iloc[nb_train_samples:, :]
+train_df, valid_df = train_valid_df.iloc[:nb_train_samples, :], train_valid_df.iloc[nb_train_samples:, :]
 
-print(X_train.shape)
-print(X_valid.shape)
-X_train.to_pickle('data/X_train_preprocessed.pkl.gz')
-X_valid.to_pickle('data/X_valid_preprocessed.pkl.gz')
+print("Training data shape: ", train_df.shape)
+print("Validation data shape: ", valid_df.shape)
+
+train_df.to_pickle('data/train_preprocessed.pkl.gz')
+valid_df.to_pickle('data/valid_preprocessed.pkl.gz')
