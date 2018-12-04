@@ -12,8 +12,9 @@ import lightgbm as lgb
 from prepare_features import add_groupby_features, add_time_features
 from sklearn.preprocessing import Imputer, MinMaxScaler
 from sklearn.model_selection import cross_val_score, StratifiedKFold
-from hyperopt import hp, tpe
+from hyperopt import hp, tpe, space_eval
 from hyperopt.fmin import fmin
+from hyperopt import Trials
 
 
 dtypes = {
@@ -44,8 +45,8 @@ extra_dtypes = {
 train_columns = ['ip', 'app', 'device', 'os', 'channel', 'click_time', 'is_attributed']
 test_columns  = ['ip', 'app', 'device', 'os', 'channel', 'click_time', 'click_id']
 
-training_path = "data/train_balanced_sanity_check.csv"
-validation_path = "data/valid_balanced_sanity_check.csv"
+training_path = "data/train_balanced_sample_1.csv"
+validation_path = "data/valid_balanced_sample_1.csv"
 testing_path = "data/test.csv"
 
 print('loading train data...')
@@ -63,72 +64,50 @@ test_df['click_time'] = pd.to_datetime(test_df['click_time'])
 y_train_df = train_df['is_attributed']
 train_df.drop(['is_attributed'], axis=1, inplace=True)
 
-# train_df = add_time_features(train_df)
-# train_df = add_groupby_features(train_df)
-
 y_valid_df = valid_df['is_attributed']
 valid_df.drop(['is_attributed'], axis=1, inplace=True)
 
-# valid_df = add_time_features(valid_df)
-# valid_df = add_groupby_features(valid_df)
-
-click_ids = test_df[['click_id']]
 test_df.drop(['click_id'], axis=1, inplace=True) # remover o id de submissão para feature engineering agrupada com treino e validação
 
-# test_df = add_time_features(test_df)
-# test_df = add_groupby_features(test_df)
-
-# print("test size : ", len(click_ids))
-# exit()
 nb_train_samples = len(train_df)
 nb_valid_samples = len(valid_df)
 
 merge = pd.concat([train_df, valid_df, test_df], sort=False)
 merge = add_time_features(merge)
-# merge = add_groupby_features(merge)
-
-del train_df, valid_df, test_df
-gc.collect()
+merge = add_groupby_features(merge)
+merge = merge.fillna(merge.mean())
 
 x_train_df, x_valid_df, x_test_df = merge.iloc[:nb_train_samples, :], merge.iloc[nb_train_samples:nb_train_samples+nb_valid_samples, :], merge.iloc[nb_train_samples+nb_valid_samples:, :]
-x_test_df.index = click_ids.index # corrigir os indices que foram alterados depois do merge
-x_test_df = pd.concat([x_test_df, click_ids], axis=1)
-
-### Preprocessing nan values ###
-# # sklearn version
-# imputer = Imputer(missing_values='NaN', strategy='mean')
-# x_train_df = pd.DataFrame(data=imputer.fit_transform(x_train_df.iloc[:, :]), index=x_train_df.index, columns=x_train_df.columns)
-# x_valid_df = pd.DataFrame(data=imputer.fit_transform(x_valid_df.iloc[:, :]), index=x_valid_df.index, columns=x_valid_df.columns)
-# x_test_df  = pd.DataFrame(data=imputer.fit_transform(x_test_df.iloc[:, :]),  index=x_test_df.index,  columns=x_test_df.columns)
-
-# pandas version
-x_train_df = x_train_df.fillna(x_train_df.mean())
-x_valid_df = x_valid_df.fillna(x_valid_df.mean())
-x_test_df = x_test_df.fillna(x_test_df.mean())
-
-x_test_df.to_csv('data/test_preprocessed_sanity_check.csv', index=False)
+x_train_df.index  = train_df.index # corrigir os indices que foram alterados depois do merge
+x_valid_df.index  = valid_df.index # corrigir os indices que foram alterados depois do merge
 
 print("train size: ", len(x_train_df))
 print("valid size: ", len(x_valid_df))
 print("test size : ", len(x_test_df))
 
+del train_df, valid_df, test_df
+gc.collect()
+
+# x_test_df = pd.concat([x_test_df, click_ids], axis=1)
+# x_test_df.to_csv('data/test_preprocessed_sanity_check.csv', index=False)
+
 train_df = pd.concat([x_train_df, y_train_df], axis=1)
 valid_df = pd.concat([x_valid_df, y_valid_df], axis=1)
 
-del x_test_df # não será utilizado agora...
-gc.collect()
+del x_test_df # o teste não será utilizado agora, só depois da otimização dos parâmetros...
 
-# train_df.info(verbose=False)
+gc.collect()
 
 target = 'is_attributed'
 all_features = list(x_train_df.columns)
-# all_features.remove('is_attributed')
 
 categorical_features = ['ip', 'app', 'device', 'os', 'channel']
 datatime_features = ['day', 'hour', 'minute', 'second', 'doy', 'wday']
 categorical_features.extend(datatime_features)
 
 gc.collect()
+
+train_df.info()
 
 print("Starts tuning LightGBM...")
 start_time = time.time()
@@ -145,6 +124,9 @@ valid_loader = lgb.Dataset(valid_df[all_features].values, label=valid_df[target]
                         free_raw_data=False
                         )
 
+
+###################### HYPERPARAMETER OPTIMIZATION USING ONE OF THE RANDOMLY SUBSAMPLED SETS ######################
+
 fixed_params = {
     'boosting_type': 'gbdt',
     'objective': 'binary',
@@ -152,6 +134,9 @@ fixed_params = {
     'learning_rate': 0.05,    
     'verbose': -1,
     'nthread': 4,
+    'min_child_weight' : 5,
+    # 'min_child_samples': 200,
+    'bagging_freq' : 1
 }
 
 opt_params = dict(**fixed_params)
@@ -160,33 +145,19 @@ def objective(params):
 
     opt_params.update(
         {    
-        'num_leaves': (2 ** int(params['max_depth'])) - 1,
+        # 'num_leaves': (2 ** int(params['max_depth'])) - 1,
+        'num_leaves': int(params['num_leaves']),
         'max_depth': int(params['max_depth']),
-        'min_child_samples': int(params['min_child_samples']),
-        'min_child_weight': '{:.3f}'.format(params['min_child_weight']),  # means something like "stop trying to split once your sample size in a node goes below a given threshold"
         'feature_fraction': '{:.3f}'.format(params['feature_fraction']),
-        # 'bagging_fraction': '{:.3f}'.format(params['bagging_fraction']),
-        # 'bagging_freq': int(params['bagging_freq']),
-        # 'lambda_l1':float(params['lambda_l1']),
-        # 'lambda_l2':float(params['lambda_l2']),
+        'bagging_fraction': '{:.3f}'.format(params['bagging_fraction']),
+        'min_child_samples': int(params['min_child_samples']),
+        # 'min_child_weight': '{:.3f}'.format(params['min_child_weight']),
         }
     )
-    
-    # clf = lgb.LGBMClassifier(
-    #     n_estimators=500,
-    #     learning_rate=0.01,
-    #     **params
-    # )
-    # fit_params = {
-    #     'valid_sets':[train_loader, valid_loader], 
-    #     'valid_names':['train','valid'],
-    #     'early_stopping_rounds':30
-    # }
-    # score = cross_val_score(clf, x_train_df, y_train_df, scoring='roc_auc', cv=StratifiedKFold(), fit_params=fit_params).mean()
-
+   
     results = {}
 
-    bst1 = lgb.train(opt_params, 
+    trial = lgb.train(opt_params, 
                      train_loader, 
                      valid_sets=[train_loader, valid_loader], 
                      valid_names=['train','valid'], 
@@ -197,7 +168,7 @@ def objective(params):
                      categorical_feature=categorical_features
                      )
 
-    n_estimators = bst1.best_iteration
+    n_estimators = trial.best_iteration
     train_score = results['train']['auc'][n_estimators-1]
     valid_score = results['valid']['auc'][n_estimators-1]
 
@@ -205,62 +176,123 @@ def objective(params):
     return 1 - valid_score
 
 space = {
-    'num_leaves': hp.choice('num_leaves', np.arange(15, 255, 5, dtype=int)),
-    'max_depth': hp.choice('max_depth', [4, 6, 8, 10]),
-    'min_child_samples': hp.choice('min_child_samples', np.arange(10, 30, 5, dtype=int)),
-    'min_child_weight' : hp.uniform('min_child_weight', 1, 10), # both min_child_samples and min_child_weight means something like "stop trying to split once your sample size in a node goes below a given threshold"
-    'feature_fraction': hp.uniform('feature_fraction', 0.5, 1.0),
-    # 'lambda_l1':hp.choice('lambda_l1', [0, 0.5, 1.0]),
-    # 'lambda_l2':hp.choice('lambda_l2', [0, 0.5, 1.0]),
-    # 'bagging_fraction': hp.uniform('bagging_fraction', 0.8, 1.0),
-    # 'bagging_freq' : hp.choice('bagging_freq', [0,1]),
+    'num_leaves': hp.choice('num_leaves', np.arange(8, 64, 8, dtype=int)),
+    'max_depth': hp.choice('max_depth', [6, 8, 10]),
+    'feature_fraction': hp.uniform('feature_fraction', 0.6, 1.0),
+    'bagging_fraction': hp.uniform('bagging_fraction', 0.8, 1.0),
+    'min_child_samples': hp.choice('min_child_samples', np.arange(10, 200, 10, dtype=int)), #  something like "stop trying to split once your sample size in a node goes below a given threshold"
+    # 'min_child_weight' : hp.uniform('min_child_weight', 1, 10), 
 }
 
-# best_optimized = fmin(fn=objective,
-#             space=space,
-#             algo=tpe.suggest,
-#             max_evals=10)
-# best_params = dict(fixed_params, **best_optimized)
+best_optimized = fmin(fn=objective,
+            space=space,
+            algo=tpe.suggest,
+            max_evals=20)
 
-best_params = {'verbose': -1, 'feature_fraction': 0.7339856029443689, 'bagging_fraction': 0.8990249943846076, 'learning_rate': 0.1, 'nthread': 4, 'min_child_weight': 3.9499190833540627, 'max_depth': 2, 'objective': 'binary', 'min_child_samples': 3, 'bagging_freq': 0, 'metric': 'auc', 'boosting_type': 'gbdt'}
+best_params = space_eval(space, best_optimized)
+best_params = dict(fixed_params, **best_params)
+
+print("#" * 50)
+print("Best Params!\n")
+print(best_params)
 with open('best_params_{}.log'.format(datetime.datetime.now()), 'w') as f:
     f.write(str(best_params))
 
-# del train_loader
-# del valid_loader
-gc.collect()
+############################### ENSEMBLE DIFFERENT GRADIENT BOOSTED TREES WITH TUNED PARAMETERS #################################
 
-full_train = pd.concat([train_df, valid_df], axis=0)
-
-train_loader = lgb.Dataset(full_train[all_features].values, label=full_train[target].values,
-                    feature_name=all_features,
-                    # categorical_feature=categorical_features,
-                    free_raw_data=False
-                    )
-
-
-final_model = lgb.train(best_params, 
-                    train_loader, 
-                    valid_sets=[train_loader],
-                    num_boost_round=5000,
-                    early_stopping_rounds=5,
-                    verbose_eval=10,
-                    categorical_feature=categorical_features
-                )
 del train_df
 del valid_df
-del full_train
+del train_loader
+del valid_loader
 gc.collect()
 
-# Load the test for predict 
-test_df = pd.read_csv('data/test_preprocessed_sanity_check.csv', usecols=all_features + ['click_id'],  dtype=dtypes)
+nb_datasets = 5
 
-sub = pd.DataFrame()
-sub['click_id'] = test_df['click_id'].astype('int')
+print('loading test data...')
+test_df_reuse = pd.read_csv(testing_path, dtype=dtypes, usecols=test_columns)
+test_df_reuse['click_time'] = pd.to_datetime(test_df_reuse['click_time'])
+click_ids = test_df_reuse['click_id']
 
-# Save the predictions
-print("Predicting...")
-sub['is_attributed'] = final_model.predict(test_df[all_features])
+test_df_reuse.drop(['click_id'], axis=1, inplace=True) # remover o id de submissão para feature engineering agrupada com treino e validação
+
+sub_ensemble = pd.DataFrame()
+sub_ensemble['click_id'] = click_ids.astype('int')
+sub_ensemble['is_attributed'] = 0
+
+for i in range(1, nb_datasets+1):
+    train_data = 'data/train_balanced_sample_{}.csv'.format(i)
+    valid_data = 'data/valid_balanced_sample_{}.csv'.format(i)
+
+    print('loading train data...')
+    train_df = pd.read_csv(train_data, dtype=dtypes, usecols=train_columns)
+    train_df['click_time'] = pd.to_datetime(train_df['click_time'])
+
+    y_train_df = train_df['is_attributed']
+    train_df.drop(['is_attributed'], axis=1, inplace=True)
+
+    print('loading valid data...')
+    valid_df = pd.read_csv(valid_data, dtype=dtypes, usecols=train_columns)
+    valid_df['click_time'] = pd.to_datetime(valid_df['click_time'])
+
+    y_valid_df = valid_df['is_attributed']
+    valid_df.drop(['is_attributed'], axis=1, inplace=True)
+
+    nb_train_samples = len(train_df)
+    nb_valid_samples = len(valid_df)
+
+    merge = pd.concat([train_df, valid_df, test_df_reuse], sort=False)
+    merge = add_time_features(merge)
+    merge = add_groupby_features(merge)
+    merge = merge.fillna(merge.mean())
+
+    x_train_df, x_valid_df, x_test_df = merge.iloc[:nb_train_samples, :], merge.iloc[nb_train_samples:nb_train_samples+nb_valid_samples, :], merge.iloc[nb_train_samples+nb_valid_samples:, :]
+    x_train_df.index  = train_df.index # corrigir os indices que foram alterados depois do merge
+    x_valid_df.index  = valid_df.index # corrigir os indices que foram alterados depois do merge
+    x_test_df.index = test_df_reuse.index # corrigir os indices que foram alterados depois do merge
+
+    del merge
+    gc.collect()
+
+    train_df = pd.concat([x_train_df, y_train_df], axis=1)
+    valid_df = pd.concat([x_valid_df, y_valid_df], axis=1)
+
+    train_loader = lgb.Dataset(train_df[all_features].values, label=train_df[target].values,
+                        feature_name=all_features,
+                        free_raw_data=False
+                    )
+    
+    valid_loader = lgb.Dataset(valid_df[all_features].values, label=valid_df[target].values,
+                        feature_name=all_features,
+                        free_raw_data=False
+                    )
+
+    current_model = lgb.train(best_params, 
+                        train_loader, 
+                        valid_sets=[train_loader, valid_loader],
+                        num_boost_round=500,
+                        early_stopping_rounds=30,
+                        verbose_eval=100,
+                        categorical_feature=categorical_features
+                    )
+
+    del train_loader
+    del valid_loader
+    del train_df
+    del valid_df
+    gc.collect()
+
+    predictions = current_model.predict(x_test_df[all_features])
+
+    sub_ensemble['is_attributed'] += predictions
+
+    sub_individual = pd.DataFrame()
+    sub_individual['click_id'] = click_ids.astype('int')
+    sub_individual['is_attributed'] = predictions
+    sub_individual.to_csv('sub_lgb_balanced_individual_{}.csv'.format(i),index=False)
+
+
+sub_ensemble['is_attributed'] = sub_ensemble['is_attributed'] / 5. # average predictions
+
 print("writing...")
-sub.to_csv('sub_lgb_balanced_{}.csv'.format(datetime.datetime.now()),index=False)
+sub_ensemble.to_csv('sub_lgb_balanced_ensemble_{}.csv'.format(datetime.datetime.now()),index=False)
 print("done...")
