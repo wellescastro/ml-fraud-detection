@@ -39,8 +39,8 @@ extra_dtypes = {
 train_columns = ['ip', 'app', 'device', 'os', 'channel', 'click_time', 'is_attributed']
 test_columns  = ['ip', 'app', 'device', 'os', 'channel', 'click_time', 'click_id']
 
-training_path = "data/train_balanced_sanity_check.csv"
-validation_path = "data/valid_balanced_sanity_check.csv"
+training_path = "data/train_balanced_sample_4.csv"
+validation_path = "data/valid_balanced_sample_4.csv"
 testing_path = "data/test.csv"
 
 print('loading train data...')
@@ -58,36 +58,27 @@ test_df['click_time'] = pd.to_datetime(test_df['click_time'])
 y_train_df = train_df['is_attributed']
 train_df.drop(['is_attributed'], axis=1, inplace=True)
 
-# train_df = add_time_features(train_df)
-# train_df = add_groupby_features(train_df)
-
 y_valid_df = valid_df['is_attributed']
 valid_df.drop(['is_attributed'], axis=1, inplace=True)
-
-# valid_df = add_time_features(valid_df)
-# valid_df = add_groupby_features(valid_df)
 
 click_ids = test_df[['click_id']]
 test_df.drop(['click_id'], axis=1, inplace=True) # remover o id de submissão para feature engineering agrupada com treino e validação
 
-# test_df = add_time_features(test_df)
-# test_df = add_groupby_features(test_df)
-
-# print("test size : ", len(click_ids))
-# exit()
 nb_train_samples = len(train_df)
 nb_valid_samples = len(valid_df)
 
 merge = pd.concat([train_df, valid_df, test_df], sort=False)
 merge = add_time_features(merge)
-# merge = add_groupby_features(merge)
+merge = add_groupby_features(merge)
+merge = merge.fillna(merge.mean())
+
+x_train_df, x_valid_df, x_test_df = merge.iloc[:nb_train_samples, :], merge.iloc[nb_train_samples:nb_train_samples+nb_valid_samples, :], merge.iloc[nb_train_samples+nb_valid_samples:, :]
+x_train_df.index  = train_df.index # corrigir os indices que foram alterados depois do merge
+x_valid_df.index  = valid_df.index # corrigir os indices que foram alterados depois do merge
+x_test_df.index = test_df.index # corrigir os indices que foram alterados depois do merge
 
 del train_df, valid_df, test_df
 gc.collect()
-
-x_train_df, x_valid_df, x_test_df = merge.iloc[:nb_train_samples, :], merge.iloc[nb_train_samples:nb_train_samples+nb_valid_samples, :], merge.iloc[nb_train_samples+nb_valid_samples:, :]
-x_test_df.index = click_ids.index # corrigir os indices que foram alterados depois do merge
-x_test_df = pd.concat([x_test_df, click_ids], axis=1)
 
 ### Preprocessing nan values ###
 # # sklearn version
@@ -97,10 +88,11 @@ x_test_df = pd.concat([x_test_df, click_ids], axis=1)
 # x_test_df  = pd.DataFrame(data=imputer.fit_transform(x_test_df.iloc[:, :]),  index=x_test_df.index,  columns=x_test_df.columns)
 
 # pandas version
-x_train_df = x_train_df.fillna(x_train_df.mean())
-x_valid_df = x_valid_df.fillna(x_train_df.mean())
-x_test_df = x_test_df.fillna(x_train_df.mean())
+# x_train_df = x_train_df.fillna(x_train_df.mean())
+# x_valid_df = x_valid_df.fillna(x_train_df.mean())
+# x_test_df = x_test_df.fillna(x_train_df.mean())
 
+x_test_df = pd.concat([x_test_df, click_ids], axis=1)
 x_test_df.to_csv('data/test_preprocessed_sanity_check.csv', index=False)
 
 print("train size: ", len(x_train_df))
@@ -134,14 +126,16 @@ lgb_params = {
     'metric':'auc',
     'learning_rate': 0.05,
     #'is_unbalance': 'true', # replaced with scale_pos_weight argument
-    'num_leaves': 255,  # 2^max_depth - 1
-    'max_depth': 8,  # -1 means no limit
-    'min_child_samples': 200,  # Minimum number of data need in a child(min_data_in_leaf)
-    'subsample': 0.9,  # Subsample ratio of the training instance.
+    'num_leaves': 48,  # 2^max_depth - 1
+    'max_depth': 10,  # -1 means no limit
+    # 'min_child_weight' : 0,
+    'min_child_samples': 10,
+    # 'min_child_samples': 10,  # Minimum number of data need in a child(min_data_in_leaf)
+    'subsample': 0.94,  # Subsample ratio of the training instance.
     'subsample_freq': 1,  # frequence of subsample, <=0 means no enable
-    'colsample_bytree': 0.5,  # Subsample ratio of columns when constructing each tree.
-    "subsample_for_bin": 1000000,
-    # 'min_child_weight': 0,  # Minimum sum of instance weight(hessian) needed in a child(leaf)
+    'colsample_bytree': 0.64,  # Subsample ratio of columns when constructing each tree.
+    # "subsample_for_bin": 1000000,
+    'min_child_weight': 3,  # Minimum sum of instance weight(hessian) needed in a child(leaf)
     # 'scale_pos_weight':200 # because training data is extremely unbalanced 
 }
 
@@ -152,9 +146,9 @@ best_model = lgb_fit(lgb_params,
                         target, 
                         objective='binary', 
                         metrics='auc',
-                        early_stopping_rounds=30, 
+                        early_stopping_rounds=50, 
                         verbose_eval=True, 
-                        num_boost_round=500, 
+                        num_boost_round=2000, 
                         categorical_features=categorical_features)
 
 print('[{}]: model training time'.format(time.time() - start_time))
@@ -173,5 +167,5 @@ sub['click_id'] = test_df['click_id'].astype('int')
 print("Predicting...")
 sub['is_attributed'] = best_model.predict(test_df[all_features])
 print("writing...")
-sub.to_csv('sub_lgb_balanced_{}.csv'.format(datetime.datetime.now()),index=False)
+sub.to_csv('sub_lgb_balanced_4_{}.csv'.format(datetime.datetime.now()),index=False)
 print("done...")

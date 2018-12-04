@@ -15,7 +15,9 @@ from sklearn.model_selection import cross_val_score, StratifiedKFold
 from hyperopt import hp, tpe, space_eval
 from hyperopt.fmin import fmin
 from hyperopt import Trials
-
+from matplotlib import pyplot as plt
+from matplotlib import rcParams
+rcParams.update({'figure.autolayout': True})
 
 dtypes = {
     'ip'                    : 'uint32',
@@ -102,7 +104,7 @@ target = 'is_attributed'
 all_features = list(x_train_df.columns)
 
 categorical_features = ['ip', 'app', 'device', 'os', 'channel']
-datatime_features = ['day', 'hour', 'minute', 'second', 'doy', 'wday']
+datatime_features = ['day', 'hour', 'minute', 'second']
 categorical_features.extend(datatime_features)
 
 gc.collect()
@@ -134,8 +136,8 @@ fixed_params = {
     'learning_rate': 0.05,    
     'verbose': -1,
     'nthread': 4,
-    'min_child_weight' : 5,
-    # 'min_child_samples': 200,
+    # 'min_child_weight' : 5,
+    # 'min_child_samples': 10,
     'bagging_freq' : 1
 }
 
@@ -151,7 +153,7 @@ def objective(params):
         'feature_fraction': '{:.3f}'.format(params['feature_fraction']),
         'bagging_fraction': '{:.3f}'.format(params['bagging_fraction']),
         'min_child_samples': int(params['min_child_samples']),
-        # 'min_child_weight': '{:.3f}'.format(params['min_child_weight']),
+        'min_child_weight': '{:.3f}'.format(params['min_child_weight']),
         }
     )
    
@@ -176,18 +178,18 @@ def objective(params):
     return 1 - valid_score
 
 space = {
-    'num_leaves': hp.choice('num_leaves', np.arange(8, 64, 8, dtype=int)),
+    'num_leaves': hp.choice('num_leaves', np.arange(8, 56, 8, dtype=int)),
     'max_depth': hp.choice('max_depth', [6, 8, 10]),
     'feature_fraction': hp.uniform('feature_fraction', 0.6, 1.0),
     'bagging_fraction': hp.uniform('bagging_fraction', 0.8, 1.0),
-    'min_child_samples': hp.choice('min_child_samples', np.arange(10, 200, 10, dtype=int)), #  something like "stop trying to split once your sample size in a node goes below a given threshold"
-    # 'min_child_weight' : hp.uniform('min_child_weight', 1, 10), 
+    'min_child_samples': hp.choice('min_child_samples', np.arange(10, 25, 5, dtype=int)), #  something like "stop trying to split once your sample size in a node goes below a given threshold"
+    'min_child_weight' : hp.uniform('min_child_weight', 2, 5),
 }
 
 best_optimized = fmin(fn=objective,
             space=space,
             algo=tpe.suggest,
-            max_evals=20)
+            max_evals=80)
 
 best_params = space_eval(space, best_optimized)
 best_params = dict(fixed_params, **best_params)
@@ -253,15 +255,17 @@ for i in range(1, nb_datasets+1):
     del merge
     gc.collect()
 
-    train_df = pd.concat([x_train_df, y_train_df], axis=1)
-    valid_df = pd.concat([x_valid_df, y_valid_df], axis=1)
+    # train_df = pd.concat([x_train_df, y_train_df], axis=1)
+    # valid_df = pd.concat([x_valid_df, y_valid_df], axis=1)
 
-    train_loader = lgb.Dataset(train_df[all_features].values, label=train_df[target].values,
+    # train_full = pd.concat([train_df, valid_df])
+
+    train_loader = lgb.Dataset(x_train_df[all_features].values, label=y_train_df.values,
                         feature_name=all_features,
                         free_raw_data=False
                     )
     
-    valid_loader = lgb.Dataset(valid_df[all_features].values, label=valid_df[target].values,
+    valid_loader = lgb.Dataset(x_valid_df[all_features].values, label=y_valid_df.values,
                         feature_name=all_features,
                         free_raw_data=False
                     )
@@ -288,11 +292,19 @@ for i in range(1, nb_datasets+1):
     sub_individual = pd.DataFrame()
     sub_individual['click_id'] = click_ids.astype('int')
     sub_individual['is_attributed'] = predictions
-    sub_individual.to_csv('sub_lgb_balanced_individual_{}.csv'.format(i),index=False)
+    sub_individual.to_csv('sub_lgb_balanced_reducedR1_individual_{}.csv'.format(i),index=False)
+
+    try:
+        current_model.save_model('sub_lgb_balanced_reducedR1_individual_{}.txt'.format(i))
+        ax = lgb.plot_importance(current_model, max_num_features=100)
+        plt.savefig('sub_lgb_balanced_reducedR1_individual_{}.png'.format(i))
+    except Exception as e:
+        print("não consegui salvar o modelo =/")
+    
 
 
 sub_ensemble['is_attributed'] = sub_ensemble['is_attributed'] / 5. # average predictions
 
 print("writing...")
-sub_ensemble.to_csv('sub_lgb_balanced_ensemble_{}.csv'.format(datetime.datetime.now()),index=False)
+sub_ensemble.to_csv('sub_lgb_balanced_reducedR1_ensemble_{}.csv'.format(datetime.datetime.now()),index=False)
 print("done...")
